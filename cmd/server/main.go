@@ -10,6 +10,7 @@ import (
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/explorer"
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/tx"
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/wallet"
+	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/zakat"
 	"github.com/joho/godotenv"
 )
 
@@ -35,7 +36,7 @@ func main() {
 	wallet.Init(pool)
 	block.Init(pool)
 	explorer.Init(pool)
-
+	zakat.Init(pool, "<zakat_wallet_id>")
 	mux := http.NewServeMux()
 	//Check API health
 	mux.HandleFunc("/health", health)

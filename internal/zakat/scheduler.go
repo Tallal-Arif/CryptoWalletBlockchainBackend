@@ -23,11 +23,9 @@ func Init(pool *pgxpool.Pool, zakatWallet string) {
 func startScheduler() {
 	// Run once a month (every 30 days for demo)
 	ticker := time.NewTicker(30 * 24 * time.Hour)
-	for {
-		select {
-		case <-ticker.C:
-			runZakatDeduction()
-		}
+	defer ticker.Stop()
+	for range ticker.C {
+		runZakatDeduction()
 	}
 }
 
