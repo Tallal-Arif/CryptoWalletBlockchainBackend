@@ -5,7 +5,10 @@ import (
 	"net/http"
 
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/auth"
+	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/block"
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/db"
+	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/explorer"
+	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/tx"
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/wallet"
 	"github.com/joho/godotenv"
 )
@@ -30,11 +33,21 @@ func main() {
 	// pass pool into your handlers or initialize your auth package
 	auth.Init(pool)
 	wallet.Init(pool)
+	block.Init(pool)
+	explorer.Init(pool)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/auth/register", auth.RegisterHandler)
 	mux.HandleFunc("/auth/verify-otp", auth.VerifyOTPHandler)
 	mux.Handle("/wallet/create", auth.JWTMiddleware(http.HandlerFunc(wallet.CreateHandler)))
+	mux.Handle("/tx/send", auth.JWTMiddleware(http.HandlerFunc(tx.SendHandler)))
+	mux.Handle("/blocks/commit", auth.JWTMiddleware(http.HandlerFunc(block.CommitHandler)))
+	mux.HandleFunc("/explorer/wallet/info", explorer.WalletInfoHandler)
+	mux.HandleFunc("/explorer/wallet/utxos", explorer.WalletUtxosHandler)
+	mux.HandleFunc("/explorer/tx", explorer.TxDetailHandler)
+	mux.HandleFunc("/explorer/blocks", explorer.BlocksListHandler)
+
 	log.Println("Server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
