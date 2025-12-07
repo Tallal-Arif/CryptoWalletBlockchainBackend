@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/auth"
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/db"
 	"github.com/joho/godotenv"
 )
@@ -19,11 +20,18 @@ func main() {
 		log.Println("No .env file found, relying on system environment")
 	}
 
-	db.ConnectDB()
+	pool, err := db.ConnectDB()
+	if err != nil {
+		log.Fatalf("DB connection failed: %v", err)
+	}
+	//defer pool.Close() // close when the server exits
 
+	// pass pool into your handlers or initialize your auth package
+	auth.Init(pool)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", health)
-
+	mux.HandleFunc("/auth/register", auth.RegisterHandler)
+	mux.HandleFunc("/auth/verify-otp", auth.VerifyOTPHandler)
 	log.Println("Server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
