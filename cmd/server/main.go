@@ -6,6 +6,7 @@ import (
 
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/auth"
 	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/db"
+	"github.com/Tallal-Arif/CryptoWalletBlockchainBackend/internal/wallet"
 	"github.com/joho/godotenv"
 )
 
@@ -28,10 +29,12 @@ func main() {
 
 	// pass pool into your handlers or initialize your auth package
 	auth.Init(pool)
+	wallet.Init(pool)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/auth/register", auth.RegisterHandler)
 	mux.HandleFunc("/auth/verify-otp", auth.VerifyOTPHandler)
+	mux.Handle("/wallet/create", auth.JWTMiddleware(http.HandlerFunc(wallet.CreateHandler)))
 	log.Println("Server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
