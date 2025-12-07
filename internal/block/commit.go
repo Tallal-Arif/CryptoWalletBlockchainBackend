@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,31 +21,36 @@ var dbPool *pgxpool.Pool
 func Init(pool *pgxpool.Pool) { dbPool = pool }
 
 type CommitRequest struct {
-	MaxTx int `json:"max_tx"` // optional limit; 0 means all pending
+	MaxTx      int `json:"max_tx"`     // 0 means all pending
+	Difficulty int `json:"difficulty"` // optional; default 5 (produces "00000..." prefix)
 }
 
 type CommitResponse struct {
-	BlockID   string   `json:"block_id"`
-	Height    int      `json:"height"`
-	PrevHash  string   `json:"prev_hash"`
-	BlockHash string   `json:"block_hash"`
-	TxIDs     []string `json:"tx_ids"`
-	Count     int      `json:"count"`
+	BlockID    string   `json:"block_id"`
+	Height     int      `json:"height"`
+	PrevHash   string   `json:"prev_hash"`
+	Hash       string   `json:"hash"`
+	Nonce      int64    `json:"nonce"`
+	Difficulty int      `json:"difficulty"`
+	TxIDs      []string `json:"tx_ids"`
+	Count      int      `json:"count"`
+	Timestamp  string   `json:"timestamp"`
 }
 
 func CommitHandler(w http.ResponseWriter, r *http.Request) {
-	// Optional: require admin via claim like role=admin
 	claims := auth.GetClaims(r)
 	if claims == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// If you have roles: role, _ := claims["role"].(string); if role != "admin" { ... }
 
 	var req CommitRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.MaxTx < 0 {
 		req.MaxTx = 0
+	}
+	if req.Difficulty <= 0 {
+		req.Difficulty = 5
 	}
 
 	ctx := context.Background()
@@ -55,19 +61,14 @@ func CommitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Get latest block for prev_hash and height
 	var prevHash string
 	var latestHeight int
-	err = tx.QueryRow(ctx,
-		`SELECT block_hash, height FROM blocks ORDER BY height DESC LIMIT 1`).
-		Scan(&prevHash, &latestHeight)
+	err = tx.QueryRow(ctx, `SELECT hash, height FROM blocks ORDER BY height DESC LIMIT 1`).Scan(&prevHash, &latestHeight)
 	if err != nil {
-		// No blocks yet: genesis
 		prevHash = "0"
 		latestHeight = -1
 	}
 
-	// Collect pending transactions
 	q := `SELECT tx_id::text FROM transactions WHERE status='pending' ORDER BY created_at ASC`
 	if req.MaxTx > 0 {
 		q += fmt.Sprintf(" LIMIT %d", req.MaxTx)
@@ -88,35 +89,43 @@ func CommitHandler(w http.ResponseWriter, r *http.Request) {
 		txIDs = append(txIDs, id)
 	}
 	rows.Close()
-
 	if len(txIDs) == 0 {
 		http.Error(w, "no pending transactions", http.StatusBadRequest)
 		return
 	}
 
-	// Compute block hash: hash(height+1 | prev_hash | timestamp | tx_ids joined)
 	nextHeight := latestHeight + 1
-	header := fmt.Sprintf("%d|%s|%d|%v", nextHeight, prevHash, time.Now().Unix(), txIDs)
-	digest := sha256.Sum256([]byte(header))
-	blockHash := hex.EncodeToString(digest[:])
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	merkleRoot := ComputeMerkleRoot(txIDs)
 
-	// Insert block
+	nonce := int64(0)
+	target := strings.Repeat("0", req.Difficulty)
+	var finalHash string
+
+	for {
+		header := fmt.Sprintf("%d|%s|%s|%s|%s|%d", nextHeight, prevHash, timestamp, merkleRoot, strings.Join(txIDs, ","), nonce)
+		sum := sha256.Sum256([]byte(header))
+		hashHex := hex.EncodeToString(sum[:])
+		if strings.HasPrefix(hashHex, target) {
+			finalHash = hashHex
+			break
+		}
+		nonce++
+	}
+
 	var blockID string
 	err = tx.QueryRow(ctx,
-		`INSERT INTO blocks (height, prev_hash, block_hash)
-         VALUES ($1,$2,$3)
+		`INSERT INTO blocks (height, prev_hash, hash, nonce, difficulty, merkle_root, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,NOW())
          RETURNING block_id::text`,
-		nextHeight, prevHash, blockHash).Scan(&blockID)
+		nextHeight, prevHash, finalHash, nonce, req.Difficulty, merkleRoot).Scan(&blockID)
 	if err != nil {
 		http.Error(w, "db insert block error", http.StatusInternalServerError)
 		return
 	}
 
-	// Attach transactions to block and mark committed
 	_, err = tx.Exec(ctx,
-		`UPDATE transactions
-         SET status='committed', block_id=$1
-         WHERE tx_id = ANY($2::uuid[])`,
+		`UPDATE transactions SET status='committed', block_id=$1 WHERE tx_id = ANY($2::uuid[])`,
 		blockID, txIDs)
 	if err != nil {
 		http.Error(w, "db update tx error", http.StatusInternalServerError)
@@ -129,12 +138,15 @@ func CommitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := CommitResponse{
-		BlockID:   blockID,
-		Height:    nextHeight,
-		PrevHash:  prevHash,
-		BlockHash: blockHash,
-		TxIDs:     txIDs,
-		Count:     len(txIDs),
+		BlockID:    blockID,
+		Height:     nextHeight,
+		PrevHash:   prevHash,
+		Hash:       finalHash,
+		Nonce:      nonce,
+		Difficulty: req.Difficulty,
+		TxIDs:      txIDs,
+		Count:      len(txIDs),
+		Timestamp:  timestamp,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
